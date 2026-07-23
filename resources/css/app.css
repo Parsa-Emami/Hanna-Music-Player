@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@source "../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php";
+@source "../../storage/framework/views/*.php";
+@source "../**/*.blade.php";
+@source "../**/*.js";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: "Vazirmatn", "Tahoma", sans-serif;
+}
+
+@layer base {
+    html {
+        direction: rtl;
+        scroll-behavior: smooth;
+    }
+
+    body {
+        @apply min-h-screen bg-[#f4f4f2] text-zinc-950;
+        @apply antialiased;
+        @apply dark:bg-[#0c0c0c] dark:text-zinc-100;
+    }
+
+    button,
+    a,
+    input {
+        @apply transition duration-200;
+    }
+
+    button {
+        @apply cursor-pointer;
+    }
+
+    button:disabled {
+        @apply cursor-not-allowed opacity-40;
+    }
+
+    input[type="range"] {
+        accent-color: #18181b;
+    }
+
+    .dark input[type="range"] {
+        accent-color: #ffffff;
+    }
+}
+
+@layer components {
+    .mono-card {
+        @apply rounded-3xl border border-black/10 bg-white;
+        @apply shadow-sm;
+        @apply dark:border-white/10 dark:bg-[#151515];
+    }
+
+    .mono-button {
+        @apply inline-flex items-center justify-center;
+        @apply rounded-full bg-zinc-950 px-5 py-3;
+        @apply text-sm font-semibold text-white;
+        @apply hover:bg-zinc-800 active:scale-[0.98];
+        @apply dark:bg-white dark:text-zinc-950;
+        @apply dark:hover:bg-zinc-200;
+    }
+
+    .mono-button-secondary {
+        @apply inline-flex items-center justify-center;
+        @apply rounded-full border border-black/10;
+        @apply bg-white px-5 py-3;
+        @apply text-sm font-medium text-zinc-800;
+        @apply hover:bg-zinc-100;
+        @apply dark:border-white/10 dark:bg-white/5;
+        @apply dark:text-zinc-200 dark:hover:bg-white/10;
+    }
+
+    .track-row {
+        @apply flex items-center justify-between gap-4;
+        @apply rounded-2xl border border-transparent p-3;
+        @apply hover:border-black/10 hover:bg-white;
+        @apply dark:hover:border-white/10 dark:hover:bg-white/5;
+    }
+
+    .track-row-active {
+        @apply border-black/15 bg-white;
+        @apply dark:border-white/15 dark:bg-white/5;
+    }
+
+    .track-play-button {
+        @apply flex size-11 shrink-0 items-center justify-center;
+        @apply rounded-full bg-zinc-200 text-zinc-950;
+        @apply hover:bg-zinc-950 hover:text-white;
+        @apply dark:bg-white/10 dark:text-white;
+        @apply dark:hover:bg-white dark:hover:text-zinc-950;
+    }
+
+    .track-play-button-active {
+        @apply bg-zinc-950 text-white;
+        @apply dark:bg-white dark:text-zinc-950;
+    }
+}
