@@ -4,6 +4,22 @@ class HannaMusicPlayer {
             '[data-audio-element]'
         );
 
+        if (this.audio) {
+
+            this.audio.setAttribute(
+                'playsinline',
+                ''
+            );
+
+            this.audio.setAttribute(
+                'webkit-playsinline',
+                ''
+            );
+
+            this.audio.preload = 'metadata';
+
+        }
+
         this.trackButtons = Array.from(
             document.querySelectorAll(
                 '[data-player-track]'
@@ -304,89 +320,195 @@ class HannaMusicPlayer {
         }
     }
 
-    loadTrack(index, autoplay = true) {
-        const track = this.tracks[index];
+    async loadTrack(index, autoplay = true) {
 
-        if (!track?.audioUrl) {
+        if (!this.tracks || !this.tracks[index]) {
+            console.warn('Track not found:', index);
             return;
         }
+
+
+        const track = this.tracks[index];
+
 
         this.currentTrackIndex = index;
 
-        const queuePosition =
-            this.queue.indexOf(index);
 
-        if (queuePosition >= 0) {
-            this.queuePosition =
-                queuePosition;
-        }
+        // توقف آهنگ قبلی
+        this.audio.pause();
 
-        this.audio.src = track.audioUrl;
+
+        // پاک کردن سورس قبلی
+        this.audio.removeAttribute('src');
+
         this.audio.load();
 
-        this.playerTitle.textContent =
-            track.title;
 
-        this.playerSubtitle.textContent =
-            'Hanna Music';
 
-        this.currentTimeElement.textContent =
-            '0:00';
+        // قرار دادن آهنگ جدید
+        this.audio.src = track.audio_url ?? track.audioUrl;
 
-        this.durationElement.textContent =
-            '0:00';
 
-        this.progressInput.value = '0';
+        // مهم برای Safari موبایل
+        this.audio.preload = 'metadata';
 
-        this.updateCover(track);
+
+        this.audio.load();
+
+
+
+        // بروزرسانی اطلاعات UI
+
+        if (this.titleElement) {
+            this.titleElement.textContent =
+                track.title ?? 'Unknown';
+        }
+
+
+        if (this.artistElement) {
+            this.artistElement.textContent =
+                track.artist ?? 'Hanna Music';
+        }
+
+
+
+        if (this.coverElement) {
+
+            if (track.cover_url) {
+
+                this.coverElement.src =
+                    track.cover_url;
+
+            } else {
+
+                this.coverElement.removeAttribute(
+                    'src'
+                );
+
+            }
+
+        }
+
+
+
         this.updateActiveTrack();
-        this.updateMediaMetadata(track);
+
+
+        this.updateMediaSession(track);
+
+
 
         if (autoplay) {
-            this.play();
+
+            await this.play();
+
         }
+
     }
 
     async play() {
-        if (this.tracks.length === 0) {
+
+
+        if (!this.audio) {
             return;
         }
 
-        if (this.currentTrackIndex < 0) {
-            const firstTrack =
-                this.queue[0] ??
-                this.allTracksQueue[0];
 
-            if (!Number.isInteger(firstTrack)) {
-                return;
-            }
-
-            this.loadTrack(firstTrack, false);
-        }
 
         try {
+
+
             await this.audio.play();
+
+
+            this.isPlaying = true;
+
+
+            this.updatePlayButton(true);
+
+
+            this.updatePlayingState(true);
+
+
+
         } catch (error) {
+
+
             console.error(
-                'Playback failed:',
+                'Audio play error:',
                 error
             );
 
+
+            this.isPlaying = false;
+
+
+            this.updatePlayButton(false);
+
+
             this.updatePlayingState(false);
+
+
         }
+
+
     }
 
     pause() {
         this.audio.pause();
     }
 
-    toggle() {
-        if (this.audio.paused) {
-            this.play();
+    async togglePlay() {
+
+
+        if (!this.audio.src) {
+
+
+            if (
+                this.currentTrackIndex !== null
+            ) {
+
+                await this.loadTrack(
+                    this.currentTrackIndex,
+                    true
+                );
+
+            }
+
+
             return;
+
         }
 
-        this.pause();
+
+
+
+        if (
+            this.audio.paused
+        ) {
+
+
+            await this.play();
+
+
+        } else {
+
+
+            this.audio.pause();
+
+
+            this.isPlaying = false;
+
+
+            this.updatePlayButton(false);
+
+
+            this.updatePlayingState(false);
+
+
+        }
+
+
     }
 
     next() {
