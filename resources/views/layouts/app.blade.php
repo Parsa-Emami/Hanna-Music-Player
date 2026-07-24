@@ -56,7 +56,7 @@
 </head>
 
 <body>
-    <div class="min-h-screen pb-40 sm:pb-32">
+    <div class="min-h-screen pb-48 sm:pb-32">
         <header
             class="sticky top-0 z-40 border-b border-black/10
                    bg-[#f4f4f2]/90 backdrop-blur-xl
@@ -290,22 +290,53 @@
                 </div>
 
                 <div
-                    class="hidden items-center justify-end
-                           gap-3 sm:flex"
+                    class="col-span-2 flex items-center gap-3
+                           border-t border-black/5 pt-2
+                           dark:border-white/10
+                           sm:col-span-1 sm:justify-end
+                           sm:border-0 sm:pt-0"
                     dir="ltr"
                 >
-                    <span class="text-sm text-zinc-500">
-                        🔊
-                    </span>
+                    <button
+                        type="button"
+                        data-player-mute
+                        class="flex size-9 shrink-0 items-center
+                               justify-center rounded-full
+                               text-sm text-zinc-600
+                               hover:bg-zinc-200
+                               dark:text-zinc-300
+                               dark:hover:bg-white/10"
+                        aria-label="قطع صدا"
+                        title="قطع یا وصل‌کردن صدا"
+                    >
+                        <span
+                            data-player-volume-icon
+                            aria-hidden="true"
+                        >
+                            🔊
+                        </span>
+                    </button>
 
                     <input
                         data-player-volume
                         type="range"
                         min="0"
                         max="100"
+                        step="1"
                         value="80"
-                        class="w-24"
+                        class="h-8 min-w-0 flex-1
+                               sm:w-24 sm:flex-none"
+                        aria-label="میزان صدا"
                     >
+
+                    <output
+                        data-player-volume-value
+                        class="w-10 text-right text-xs
+                               tabular-nums text-zinc-500
+                               sm:hidden"
+                    >
+                        80%
+                    </output>
                 </div>
             </div>
         </div>

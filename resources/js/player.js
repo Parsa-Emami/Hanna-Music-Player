@@ -26,6 +26,15 @@ class HannaMusicPlayer {
         this.volumeInput = document.querySelector(
             '[data-player-volume]'
         );
+        this.muteButton = document.querySelector(
+            '[data-player-mute]'
+        );
+        this.volumeIcon = document.querySelector(
+            '[data-player-volume-icon]'
+        );
+        this.volumeValue = document.querySelector(
+            '[data-player-volume-value]'
+        );
         this.playerTitle = document.querySelector(
             '[data-player-title]'
         );
@@ -66,6 +75,7 @@ class HannaMusicPlayer {
         this.queue = [...this.allTracksQueue];
         this.queuePosition = -1;
         this.currentTrackIndex = -1;
+        this.lastNonZeroVolume = 0.8;
 
         if (!this.audio || !this.toggleButton) {
             return;
@@ -190,15 +200,15 @@ class HannaMusicPlayer {
                 Math.max(0, Number(this.volumeInput.value) / 100)
             );
 
-            try {
-                this.audio.volume = volume;
-                localStorage.setItem(
-                    'hanna-player-volume',
-                    String(volume)
-                );
-            } catch {
-                // Safari iOS may control output volume at system level.
-            }
+            this.setVolume(volume, true);
+        });
+
+        this.muteButton?.addEventListener('click', () => {
+            this.toggleMute();
+        });
+
+        this.audio.addEventListener('volumechange', () => {
+            this.updateVolumeUi();
         });
 
         this.bindMediaSession();
@@ -476,15 +486,118 @@ class HannaMusicPlayer {
             if (Number.isFinite(storedVolume)) {
                 volume = Math.min(1, Math.max(0, storedVolume));
             }
+        } catch {
+            // Local storage may be unavailable.
+        }
 
+        if (volume > 0) {
+            this.lastNonZeroVolume = volume;
+        }
+
+        try {
+            this.audio.muted = volume === 0;
             this.audio.volume = volume;
         } catch {
-            // Local storage or volume changes may be restricted.
+            // Some mobile browsers keep output volume at system level.
         }
 
-        if (this.volumeInput) {
-            this.volumeInput.value = String(Math.round(volume * 100));
+        this.updateVolumeUi(volume);
+    }
+
+    setVolume(volume, persist = false) {
+        const normalizedVolume = Math.min(
+            1,
+            Math.max(0, Number(volume) || 0)
+        );
+
+        if (normalizedVolume > 0) {
+            this.lastNonZeroVolume = normalizedVolume;
         }
+
+        try {
+            this.audio.muted = normalizedVolume === 0;
+            this.audio.volume = normalizedVolume;
+        } catch {
+            // Some mobile browsers keep output volume at system level.
+        }
+
+        if (persist) {
+            try {
+                localStorage.setItem(
+                    'hanna-player-volume',
+                    String(normalizedVolume)
+                );
+            } catch {
+                // Local storage may be unavailable.
+            }
+        }
+
+        this.updateVolumeUi(normalizedVolume);
+    }
+
+    toggleMute() {
+        if (!this.audio) {
+            return;
+        }
+
+        if (this.audio.muted || this.audio.volume === 0) {
+            const restoredVolume =
+                this.lastNonZeroVolume > 0
+                    ? this.lastNonZeroVolume
+                    : 0.8;
+
+            this.audio.muted = false;
+            this.setVolume(restoredVolume, true);
+            return;
+        }
+
+        if (this.audio.volume > 0) {
+            this.lastNonZeroVolume = this.audio.volume;
+        }
+
+        this.audio.muted = true;
+        this.updateVolumeUi(0);
+    }
+
+    updateVolumeUi(preferredVolume = null) {
+        const rawVolume = Number.isFinite(preferredVolume)
+            ? preferredVolume
+            : this.audio?.volume ?? 0.8;
+
+        const effectiveVolume =
+            this.audio?.muted
+                ? 0
+                : Math.min(1, Math.max(0, rawVolume));
+
+        const percentage = Math.round(effectiveVolume * 100);
+
+        if (this.volumeInput) {
+            this.volumeInput.value = String(percentage);
+            this.volumeInput.setAttribute(
+                'aria-valuetext',
+                `${percentage} درصد`
+            );
+        }
+
+        if (this.volumeValue) {
+            this.volumeValue.textContent = `${percentage}%`;
+        }
+
+        if (this.volumeIcon) {
+            this.volumeIcon.textContent =
+                percentage === 0
+                    ? '🔇'
+                    : percentage < 50
+                        ? '🔉'
+                        : '🔊';
+        }
+
+        this.muteButton?.setAttribute(
+            'aria-label',
+            percentage === 0
+                ? 'وصل‌کردن صدا'
+                : 'قطع صدا'
+        );
     }
 
     updateDisabledState() {
@@ -496,6 +609,8 @@ class HannaMusicPlayer {
             this.previousButton,
             this.nextButton,
             this.progressInput,
+            this.volumeInput,
+            this.muteButton,
         ].forEach((element) => {
             if (element) {
                 element.disabled = disabled;

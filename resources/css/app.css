@@ -44,6 +44,19 @@
     .dark input[type="range"] {
         accent-color: #ffffff;
     }
+
+    input[data-player-volume] {
+        min-height: 2rem;
+        touch-action: pan-x;
+    }
+
+    input[data-player-volume]::-webkit-slider-thumb {
+        cursor: grab;
+    }
+
+    input[data-player-volume]:active::-webkit-slider-thumb {
+        cursor: grabbing;
+    }
 }
 
 @layer components {
