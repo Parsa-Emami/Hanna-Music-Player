@@ -152,6 +152,8 @@
     <audio
         data-audio-element
         preload="metadata"
+        playsinline
+        webkit-playsinline
     ></audio>
 
     <section
@@ -189,6 +191,7 @@
                     <div class="min-w-0">
                         <p
                             data-player-title
+                            aria-live="polite"
                             class="truncate text-sm font-bold"
                         >
                             یک آهنگ انتخاب کن

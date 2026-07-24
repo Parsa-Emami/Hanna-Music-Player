@@ -48,8 +48,8 @@ return [
     | برای ساخت پلی‌لیست انتخابی، نام دقیق فایل‌ها را وارد کن:
     |
     | 'files' => [
-    |     '03 Blinding Lights.flac',
-    |     '07 Starboy.flac',
+    |     '03 Blinding Lights.mp3',
+    |     '07 Starboy.mp3',
     | ],
     |
     */
@@ -78,14 +78,14 @@ return [
             'cover' => null,
 
             'files' => [
-                '03 Blinding Lights.flac',
-                '07 Starboy.flac',
-                '09 Sacrifice.flac',
-                '12 Less Than Zero.flac',
-                '13 The Hills.flac',
-                '19 After Hours.flac',
-                '29 Die For You.flac',
-                '39 Save Your Tears.flac',
+                '03 Blinding Lights.mp3',
+                '07 Starboy.mp3',
+                '09 Sacrifice.mp3',
+                '12 Less Than Zero.mp3',
+                '13 The Hills.mp3',
+                '19 After Hours.mp3',
+                '29 Die For You.mp3',
+                '39 Save Your Tears.mp3',
             ],
         ],
 

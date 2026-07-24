@@ -45,13 +45,25 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - name: Ensure FFmpeg is available
+        shell: bash
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1 || \
+             ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
       - name: Create Laravel environment
         shell: bash
         run: |
           mkdir -p database
           touch database/database.sqlite
 
-          cat > .env <<EOF
+          cat > .env <<EOF_ENV
           APP_NAME="Hanna Music Player"
           APP_ENV=production
           APP_KEY=
@@ -74,7 +86,7 @@ jobs:
           QUEUE_CONNECTION=sync
 
           FILESYSTEM_DISK=local
-          EOF
+          EOF_ENV
 
       - name: Install Composer dependencies
         run: |
@@ -114,17 +126,94 @@ jobs:
           echo "Vite build completed successfully."
           find public/build -maxdepth 2 -type f | sort
 
-      - name: Verify music files
+      - name: Normalize audio for mobile browsers
         shell: bash
         run: |
+          set -euo pipefail
+
           AUDIO_DIRECTORY="public/music/audio"
+          NORMALIZED_DIRECTORY="${RUNNER_TEMP}/hanna-normalized-audio"
 
           if [ ! -d "${AUDIO_DIRECTORY}" ]; then
             echo "ERROR: ${AUDIO_DIRECTORY} does not exist."
             exit 1
           fi
 
-          AUDIO_COUNT=$(find "${AUDIO_DIRECTORY}" \
+          rm -rf "${NORMALIZED_DIRECTORY}"
+          mkdir -p "${NORMALIZED_DIRECTORY}"
+
+          AUDIO_COUNT=0
+
+          while IFS= read -r -d '' SOURCE_FILE; do
+            AUDIO_COUNT=$((AUDIO_COUNT + 1))
+
+            FILENAME="$(basename "${SOURCE_FILE}")"
+            STEM="${FILENAME%.*}"
+            TARGET_FILE="${NORMALIZED_DIRECTORY}/${STEM}.mp3"
+
+            CODEC="$(
+              ffprobe \
+                -v error \
+                -select_streams a:0 \
+                -show_entries stream=codec_name \
+                -of default=noprint_wrappers=1:nokey=1 \
+                "${SOURCE_FILE}" \
+                | head -n 1
+            )"
+
+            if [ -z "${CODEC}" ]; then
+              echo "ERROR: No audio stream found in ${FILENAME}."
+              exit 1
+            fi
+
+            if [ -e "${TARGET_FILE}" ]; then
+              echo "ERROR: Duplicate audio basename after MP3 normalization: ${STEM}"
+              exit 1
+            fi
+
+            if [ "${CODEC}" = "mp3" ] && \
+               [[ "${FILENAME,,}" == *.mp3 ]]; then
+              cp "${SOURCE_FILE}" "${TARGET_FILE}"
+              echo "Already mobile compatible: ${FILENAME}"
+            else
+              echo "Converting ${FILENAME} (${CODEC}) to ${STEM}.mp3"
+
+              ffmpeg \
+                -nostdin \
+                -hide_banner \
+                -loglevel error \
+                -y \
+                -i "${SOURCE_FILE}" \
+                -map 0:a:0 \
+                -vn \
+                -c:a libmp3lame \
+                -b:a 192k \
+                -ar 44100 \
+                -ac 2 \
+                -map_metadata 0 \
+                "${TARGET_FILE}"
+            fi
+          done < <(
+            find "${AUDIO_DIRECTORY}" \
+              -maxdepth 1 \
+              -type f \
+              \( \
+                -iname "*.mp3" \
+                -o -iname "*.m4a" \
+                -o -iname "*.aac" \
+                -o -iname "*.ogg" \
+                -o -iname "*.wav" \
+                -o -iname "*.flac" \
+              \) \
+              -print0
+          )
+
+          if [ "${AUDIO_COUNT}" -eq 0 ]; then
+            echo "ERROR: No supported audio files were found."
+            exit 1
+          fi
+
+          find "${AUDIO_DIRECTORY}" \
             -maxdepth 1 \
             -type f \
             \( \
@@ -135,15 +224,42 @@ jobs:
               -o -iname "*.wav" \
               -o -iname "*.flac" \
             \) \
-            | wc -l)
+            -delete
 
-          echo "Audio files found: ${AUDIO_COUNT}"
+          cp -a "${NORMALIZED_DIRECTORY}/." "${AUDIO_DIRECTORY}/"
+
+          while IFS= read -r -d '' MP3_FILE; do
+            CODEC="$(
+              ffprobe \
+                -v error \
+                -select_streams a:0 \
+                -show_entries stream=codec_name \
+                -of default=noprint_wrappers=1:nokey=1 \
+                "${MP3_FILE}" \
+                | head -n 1
+            )"
+
+            if [ "${CODEC}" != "mp3" ]; then
+              echo "ERROR: ${MP3_FILE} is not a real MP3 file. Codec: ${CODEC}"
+              exit 1
+            fi
+          done < <(
+            find "${AUDIO_DIRECTORY}" \
+              -maxdepth 1 \
+              -type f \
+              -iname "*.mp3" \
+              -print0
+          )
+
+          echo "Mobile-compatible audio files:"
+          find "${AUDIO_DIRECTORY}" \
+            -maxdepth 1 \
+            -type f \
+            -iname "*.mp3" \
+            -printf '%f\n' \
+            | sort
+
           du -sh "${AUDIO_DIRECTORY}"
-
-          if [ "${AUDIO_COUNT}" -eq 0 ]; then
-            echo "ERROR: No supported audio files were found."
-            exit 1
-          fi
 
       - name: Start temporary Laravel server
         shell: bash
@@ -170,11 +286,7 @@ jobs:
           done
 
           echo "ERROR: Laravel server did not become ready."
-
-          if [ -f laravel-server.log ]; then
-            cat laravel-server.log
-          fi
-
+          cat laravel-server.log || true
           exit 1
 
       - name: Prepare static website
@@ -183,16 +295,11 @@ jobs:
           rm -rf _site
           mkdir -p _site
 
-          # کپی تمام فایل‌های عمومی:
-          # build، music، تصاویر، favicon و سایر فایل‌ها
           cp -a public/. _site/
 
-          # فایل‌های مخصوص اجرای Laravel روی Pages لازم نیستند
           rm -f _site/index.php
           rm -f _site/.htaccess
           rm -f _site/hot
-
-          # لینک‌های نمادین ممکن است داخل Artifact معتبر نباشند
           find _site -type l -delete
 
           touch _site/.nojekyll
@@ -208,7 +315,6 @@ jobs:
             http://127.0.0.1:8000/ \
             --output _site/index.html
 
-          # جایگزینی احتیاطی آدرس سرور موقت
           sed -i \
             "s#http://127.0.0.1:8000#${PAGES_URL}#g" \
             _site/index.html
@@ -219,43 +325,78 @@ jobs:
 
           cp _site/index.html _site/404.html
 
-      - name: Validate static output
+      - name: Validate static output and audio URLs
         shell: bash
         run: |
-          if [ ! -s _site/index.html ]; then
-            echo "ERROR: _site/index.html is missing or empty."
+          python3 <<'PYTHON'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import unquote, urlparse
 
-            if [ -f laravel-server.log ]; then
-              cat laravel-server.log
-            fi
+          site = Path('_site')
+          index = site / 'index.html'
 
-            exit 1
-          fi
+          if not index.is_file() or index.stat().st_size == 0:
+              raise SystemExit('ERROR: _site/index.html is missing or empty.')
 
-          # عنوان واقعی دو حرف n دارد: Hanna
-          if ! grep -Fq "Hanna Music" _site/index.html; then
-            echo "ERROR: Hanna Music title was not found in index.html."
-            echo "First 80 lines of generated HTML:"
-            sed -n '1,80p' _site/index.html
-            exit 1
-          fi
+          html = index.read_text(encoding='utf-8')
 
-          # بررسی وجود رابط پخش آهنگ
-          if ! grep -Fq "data-player-track" _site/index.html; then
-            echo "ERROR: No playable tracks were rendered."
-            echo "Check public/music/audio and HomeController."
-            sed -n '1,120p' _site/index.html
-            exit 1
-          fi
+          if 'Hanna Music' not in html:
+              raise SystemExit('ERROR: Hanna Music title was not found.')
 
-          # آدرس لوکال نباید در خروجی نهایی باقی مانده باشد
-          if grep -Eq \
-            "127\.0\.0\.1:8000|localhost:8000" \
-            _site/index.html; then
+          class TrackParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.urls = []
 
-            echo "ERROR: Local server URLs remain in index.html."
-            exit 1
-          fi
+              def handle_starttag(self, tag, attrs):
+                  attributes = dict(attrs)
+                  if 'data-player-track' in attributes:
+                      url = attributes.get('data-audio-url')
+                      if url:
+                          self.urls.append(url)
+
+          parser = TrackParser()
+          parser.feed(html)
+
+          if not parser.urls:
+              raise SystemExit('ERROR: No playable tracks were rendered.')
+
+          missing = []
+          invalid_extensions = []
+
+          for url in parser.urls:
+              path = unquote(urlparse(url).path)
+              marker = '/Hanna-Music-Player/'
+
+              if marker in path:
+                  relative = path.split(marker, 1)[1]
+              else:
+                  relative = path.lstrip('/')
+
+              if not relative.lower().endswith('.mp3'):
+                  invalid_extensions.append(url)
+
+              if not (site / relative).is_file():
+                  missing.append((url, relative))
+
+          if invalid_extensions:
+              raise SystemExit(
+                  'ERROR: Non-MP3 URLs remain in generated HTML:\n' +
+                  '\n'.join(invalid_extensions)
+              )
+
+          if missing:
+              raise SystemExit(
+                  'ERROR: Generated audio URLs do not point to files:\n' +
+                  '\n'.join(f'{url} -> {path}' for url, path in missing)
+              )
+
+          if '127.0.0.1:8000' in html or 'localhost:8000' in html:
+              raise SystemExit('ERROR: Local server URLs remain in index.html.')
+
+          print(f'Validated {len(parser.urls)} playable MP3 tracks.')
+          PYTHON
 
           echo "Hanna Music static export validated successfully."
           echo "Published site size:"
@@ -265,10 +406,8 @@ jobs:
           find _site/music/audio \
             -maxdepth 1 \
             -type f \
+            -iname "*.mp3" \
             | wc -l
-
-          echo "Generated page title:"
-          grep -i -A2 -B1 "<title" _site/index.html || true
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
