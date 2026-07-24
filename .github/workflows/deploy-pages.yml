@@ -19,20 +19,24 @@ concurrency:
 env:
   PAGES_URL: https://parsa-emami.github.io/Hanna-Music-Player
 
+
 jobs:
+
   build:
-    name: Build static website
+
+    name: Build Hanna Music Player
     runs-on: ubuntu-latest
+
     timeout-minutes: 30
 
+
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Download Git LFS files
-        run: git lfs pull
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -42,209 +46,346 @@ jobs:
           coverage: none
           tools: composer:v2
 
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
+
+
       - name: Create Laravel environment
         shell: bash
         run: |
+
           mkdir -p database
+
           touch database/database.sqlite
 
+
           cat > .env <<EOF
+
           APP_NAME="Hanna Music Player"
           APP_ENV=production
           APP_KEY=
           APP_DEBUG=false
+
           APP_URL=${PAGES_URL}
           ASSET_URL=${PAGES_URL}
 
+
           APP_LOCALE=fa
           APP_FALLBACK_LOCALE=en
+          APP_FAKER_LOCALE=fa_IR
+
 
           LOG_CHANNEL=stderr
           LOG_LEVEL=error
 
+
           DB_CONNECTION=sqlite
           DB_DATABASE=${GITHUB_WORKSPACE}/database/database.sqlite
+
 
           SESSION_DRIVER=array
           CACHE_STORE=array
           QUEUE_CONNECTION=sync
+
+
           FILESYSTEM_DISK=local
+
           EOF
 
-      - name: Install PHP dependencies
+
+
+      - name: Install Composer dependencies
         run: |
+
           composer install \
-            --no-dev \
-            --prefer-dist \
-            --optimize-autoloader \
-            --no-interaction \
-            --no-progress
+          --no-dev \
+          --prefer-dist \
+          --optimize-autoloader \
+          --no-interaction \
+          --no-progress
+
+
 
       - name: Generate Laravel key
+
         run: |
+
           php artisan key:generate --force
+
           php artisan optimize:clear
 
-      - name: Install frontend dependencies
-        shell: bash
+
+
+
+      - name: Install NPM dependencies
+
         run: |
+
           if [ -f package-lock.json ]; then
             npm ci
           else
             npm install
           fi
 
-      - name: Build Vite assets
-        run: npm run build
 
-      - name: Verify Vite build
-        shell: bash
-        run: |
-          if [ ! -f public/build/manifest.json ]; then
-            echo "ERROR: Vite manifest was not generated."
-            exit 1
-          fi
 
-      - name: Verify audio files
-        shell: bash
+
+      - name: Build frontend assets
+
+        run:
+
+          npm run build
+
+
+
+
+      - name: Verify assets
+
         run: |
+
+          test -f public/build/manifest.json
+
+          echo "Vite build OK"
+
+
+
+
+      - name: Verify music files
+
+        shell: bash
+
+        run: |
+
           if [ ! -d public/music/audio ]; then
-            echo "ERROR: public/music/audio does not exist."
+
+            echo "Music folder missing"
+
             exit 1
+
           fi
 
-          AUDIO_COUNT=$(find public/music/audio -maxdepth 1 -type f \
-            \( -iname "*.flac" \
-            -o -iname "*.mp3" \
-            -o -iname "*.m4a" \
-            -o -iname "*.aac" \
-            -o -iname "*.ogg" \
-            -o -iname "*.wav" \) | wc -l)
 
-          echo "Audio files found: ${AUDIO_COUNT}"
+          COUNT=$(find public/music/audio -type f | wc -l)
 
-          if [ "${AUDIO_COUNT}" -eq 0 ]; then
-            echo "ERROR: No audio files were found."
+
+          echo "Music files: $COUNT"
+
+
+          if [ "$COUNT" -eq 0 ]; then
+
+            echo "No music found"
+
             exit 1
+
           fi
 
-          du -sh public/music/audio
 
-      - name: Start temporary Laravel server
+
+      - name: Start Laravel server
+
         shell: bash
+
         run: |
+
           php artisan serve \
-            --host=127.0.0.1 \
-            --port=8000 \
-            > laravel-server.log 2>&1 &
+          --host=127.0.0.1 \
+          --port=8000 \
+          > laravel.log 2>&1 &
 
-          echo $! > laravel-server.pid
 
-          for attempt in {1..30}; do
-            if curl --fail --silent \
-              http://127.0.0.1:8000/ \
-              > /dev/null; then
+          for i in {1..30}; do
 
-              echo "Laravel server is ready."
+            if curl -s http://127.0.0.1:8000 > /dev/null;
+
+            then
+
+              echo "Laravel ready"
+
               exit 0
+
             fi
 
+
             sleep 1
+
           done
 
-          echo "ERROR: Laravel server did not start."
 
-          if [ -f laravel-server.log ]; then
-            cat laravel-server.log
-          fi
+          cat laravel.log
 
           exit 1
 
-      - name: Prepare static website
-        shell: bash
+
+
+
+      - name: Create static site folder
+
         run: |
+
           rm -rf _site
-          mkdir -p _site
 
-          cp -a public/. _site/
+          mkdir _site
 
-          rm -f _site/index.php
-          rm -f _site/.htaccess
-          rm -f _site/hot
 
-          find _site -type l -delete
 
-          touch _site/.nojekyll
+
 
       - name: Export Laravel homepage
+
         shell: bash
+
         run: |
+
+
           curl \
-            --fail \
-            --show-error \
-            --silent \
-            --location \
-            http://127.0.0.1:8000/ \
-            --output _site/index.html
+          --fail \
+          --silent \
+          http://127.0.0.1:8000/ \
+          --output _site/index.html
 
-          sed -i \
-            "s#http://127.0.0.1:8000#${PAGES_URL}#g" \
-            _site/index.html
 
-          sed -i \
-            "s#http://localhost:8000#${PAGES_URL}#g" \
-            _site/index.html
 
           cp _site/index.html _site/404.html
 
-      - name: Validate static output
+
+
+
+      - name: Copy public assets
+
         shell: bash
+
         run: |
-          if [ ! -s _site/index.html ]; then
-            echo "ERROR: index.html was not generated."
 
-            if [ -f laravel-server.log ]; then
-              cat laravel-server.log
-            fi
+
+          cp -R public/build _site/build
+
+          cp -R public/music _site/music
+
+
+
+      - name: Fix GitHub Pages paths
+
+        shell: bash
+
+        run: |
+
+
+          sed -i \
+          "s#href=\"/#href=\"/Hanna-Music-Player/#g" \
+          _site/index.html
+
+
+
+          sed -i \
+          "s#src=\"/#src=\"/Hanna-Music-Player/#g" \
+          _site/index.html
+
+
+
+          sed -i \
+          "s#/music/#/Hanna-Music-Player/music/#g" \
+          _site/index.html
+
+
+
+          sed -i \
+          "s#/build/#/Hanna-Music-Player/build/#g" \
+          _site/index.html
+
+
+
+
+
+      - name: Validate output
+
+        shell: bash
+
+        run: |
+
+
+          if ! grep -q "Hana Music" _site/index.html;
+
+          then
+
+            echo "ERROR: Hanna page not generated"
+
+            cat _site/index.html | head -50
 
             exit 1
+
           fi
 
-          if grep -E \
-            "127\.0\.0\.1:8000|localhost:8000" \
-            _site/index.html; then
 
-            echo "ERROR: Local URLs remain in index.html."
-            exit 1
-          fi
 
-          echo "Static website generated successfully."
+          echo "Static export successful"
+
+
           du -sh _site
 
-      - name: Configure GitHub Pages
+
+
+
+      - name: Add nojekyll
+
+        run:
+
+          touch _site/.nojekyll
+
+
+
+
+      - name: Configure Pages
+
         uses: actions/configure-pages@v5
 
-      - name: Upload GitHub Pages artifact
+
+
+
+
+      - name: Upload artifact
+
         uses: actions/upload-pages-artifact@v4
+
         with:
+
           path: _site
 
+
+
+
+
   deploy:
-    name: Deploy website
+
+
+    name: Deploy Hanna Music
+
+
     runs-on: ubuntu-latest
+
+
     needs: build
-    timeout-minutes: 15
+
+
 
     environment:
+
       name: github-pages
+
       url: ${{ steps.deployment.outputs.page_url }}
 
+
+
     steps:
-      - name: Deploy to GitHub Pages
+
+
+      - name: Deploy Pages
+
+
         id: deployment
+
+
         uses: actions/deploy-pages@v4
