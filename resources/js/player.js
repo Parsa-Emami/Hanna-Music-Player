@@ -1,6 +1,6 @@
 class HannaMusicPlayer {
     constructor() {
-        this.audio = document.querySelector('[data-audio-element]');
+        this.primaryAudio = document.querySelector('[data-audio-element]');
         this.trackButtons = Array.from(
             document.querySelectorAll('[data-player-track]')
         );
@@ -8,57 +8,30 @@ class HannaMusicPlayer {
             document.querySelectorAll('[data-playlist-start]')
         );
 
-        this.startAllButton = document.querySelector(
-            '[data-player-start-all]'
-        );
-        this.toggleButton = document.querySelector(
-            '[data-player-toggle]'
-        );
-        this.previousButton = document.querySelector(
-            '[data-player-previous]'
-        );
-        this.nextButton = document.querySelector(
-            '[data-player-next]'
-        );
-        this.progressInput = document.querySelector(
-            '[data-player-progress]'
-        );
-        this.volumeInput = document.querySelector(
-            '[data-player-volume]'
-        );
-        this.muteButton = document.querySelector(
-            '[data-player-mute]'
-        );
-        this.volumeIcon = document.querySelector(
-            '[data-player-volume-icon]'
-        );
-        this.volumeValue = document.querySelector(
-            '[data-player-volume-value]'
-        );
-        this.playerTitle = document.querySelector(
-            '[data-player-title]'
-        );
-        this.playerSubtitle = document.querySelector(
-            '[data-player-subtitle]'
-        );
-        this.playerCover = document.querySelector(
-            '[data-player-cover]'
-        );
+        this.startAllButton = document.querySelector('[data-player-start-all]');
+        this.toggleButton = document.querySelector('[data-player-toggle]');
+        this.previousButton = document.querySelector('[data-player-previous]');
+        this.nextButton = document.querySelector('[data-player-next]');
+        this.shuffleButton = document.querySelector('[data-player-shuffle]');
+        this.repeatOneButton = document.querySelector('[data-player-repeat-one]');
+        this.progressInput = document.querySelector('[data-player-progress]');
+        this.volumeInput = document.querySelector('[data-player-volume]');
+        this.muteButton = document.querySelector('[data-player-mute]');
+        this.volumeIcon = document.querySelector('[data-player-volume-icon]');
+        this.volumeValue = document.querySelector('[data-player-volume-value]');
+        this.playerTitle = document.querySelector('[data-player-title]');
+        this.playerSubtitle = document.querySelector('[data-player-subtitle]');
+        this.playerCover = document.querySelector('[data-player-cover]');
         this.playerCoverFallback = document.querySelector(
             '[data-player-cover-fallback]'
         );
         this.currentTimeElement = document.querySelector(
             '[data-player-current-time]'
         );
-        this.durationElement = document.querySelector(
-            '[data-player-duration]'
-        );
-        this.playIcon = document.querySelector(
-            '[data-player-play-icon]'
-        );
-        this.pauseIcon = document.querySelector(
-            '[data-player-pause-icon]'
-        );
+        this.durationElement = document.querySelector('[data-player-duration]');
+        this.playIcon = document.querySelector('[data-player-play-icon]');
+        this.pauseIcon = document.querySelector('[data-player-pause-icon]');
+        this.crossfadeLabel = document.querySelector('[data-player-crossfade-label]');
 
         this.tracks = this.trackButtons.map((button, index) => ({
             index,
@@ -72,25 +45,55 @@ class HannaMusicPlayer {
             this.tracks.map((track) => [track.id, track.index])
         );
         this.allTracksQueue = this.tracks.map((track) => track.index);
+        this.orderedQueue = [...this.allTracksQueue];
         this.queue = [...this.allTracksQueue];
         this.queuePosition = -1;
         this.currentTrackIndex = -1;
-        this.lastNonZeroVolume = 0.8;
+        this.currentContextName = 'همه آهنگ‌ها';
 
-        if (!this.audio || !this.toggleButton) {
+        this.crossfadeSeconds = Math.max(
+            0,
+            Number(this.primaryAudio?.dataset.crossfadeSeconds || 5)
+        );
+        this.activeSlot = 0;
+        this.audioContext = null;
+        this.gainNodes = [];
+        this.transitionToken = 0;
+        this.isTransitioning = false;
+        this.autoTransitionTriggered = false;
+        this.masterVolume = 0.8;
+        this.lastNonZeroVolume = 0.8;
+        this.muted = false;
+        this.shuffleEnabled = false;
+        this.repeatOneEnabled = false;
+
+        if (!this.primaryAudio || !this.toggleButton) {
             return;
         }
 
-        this.prepareAudioElement();
-        this.restoreVolume();
+        const secondaryAudio = this.primaryAudio.cloneNode(false);
+        secondaryAudio.removeAttribute('data-audio-element');
+        secondaryAudio.dataset.audioSecondary = 'true';
+        secondaryAudio.setAttribute('aria-hidden', 'true');
+        this.primaryAudio.after(secondaryAudio);
+        this.audios = [this.primaryAudio, secondaryAudio];
+
+        this.prepareAudioElements();
+        this.restorePreferences();
+        this.applyQueueMode(this.currentTrackIndex);
         this.bindEvents();
+        this.updateModeUi();
         this.updateDisabledState();
+        this.updateCrossfadeLabel();
     }
 
-    prepareAudioElement() {
-        this.audio.setAttribute('playsinline', '');
-        this.audio.setAttribute('webkit-playsinline', '');
-        this.audio.preload = 'metadata';
+    prepareAudioElements() {
+        this.audios.forEach((audio) => {
+            audio.setAttribute('playsinline', '');
+            audio.setAttribute('webkit-playsinline', '');
+            audio.preload = 'metadata';
+            audio.volume = this.masterVolume;
+        });
     }
 
     bindEvents() {
@@ -101,12 +104,14 @@ class HannaMusicPlayer {
                 return;
             }
 
+            this.currentContextName = 'همه آهنگ‌ها';
             this.setQueue(this.allTracksQueue, firstTrack);
-            void this.loadTrack(firstTrack, true);
+            void this.loadTrack(firstTrack, true, true);
         });
 
         this.trackButtons.forEach((button, index) => {
             button.addEventListener('click', () => {
+                this.currentContextName = 'همه آهنگ‌ها';
                 this.setQueue(this.allTracksQueue, index);
 
                 if (this.currentTrackIndex === index) {
@@ -114,15 +119,13 @@ class HannaMusicPlayer {
                     return;
                 }
 
-                void this.loadTrack(index, true);
+                void this.loadTrack(index, true, true);
             });
         });
 
         this.playlistButtons.forEach((button) => {
             button.addEventListener('click', () => {
-                const ids = this.parseTrackIds(
-                    button.dataset.playlistTrackIds
-                );
+                const ids = this.parseTrackIds(button.dataset.playlistTrackIds);
                 const queue = ids
                     .map((id) => this.indexByTrackId.get(String(id)))
                     .filter(Number.isInteger);
@@ -132,8 +135,10 @@ class HannaMusicPlayer {
                     return;
                 }
 
+                this.currentContextName =
+                    button.dataset.playlistName || 'پلی‌لیست';
                 this.setQueue(queue, firstTrack);
-                void this.loadTrack(firstTrack, true);
+                void this.loadTrack(firstTrack, true, true);
             });
         });
 
@@ -146,52 +151,76 @@ class HannaMusicPlayer {
         });
 
         this.nextButton?.addEventListener('click', () => {
-            void this.next();
+            void this.next(false);
         });
 
-        this.audio.addEventListener('play', () => {
-            this.updatePlayingState(true);
+        this.shuffleButton?.addEventListener('click', () => {
+            this.toggleShuffle();
         });
 
-        this.audio.addEventListener('pause', () => {
-            this.updatePlayingState(false);
+        this.repeatOneButton?.addEventListener('click', () => {
+            this.repeatOneEnabled = !this.repeatOneEnabled;
+            this.persistPreference('hanna-player-repeat-one', this.repeatOneEnabled);
+            this.updateModeUi();
         });
 
-        this.audio.addEventListener('ended', () => {
-            void this.next();
-        });
+        this.audios.forEach((audio, slot) => {
+            audio.addEventListener('play', () => {
+                if (slot === this.activeSlot) {
+                    this.updatePlayingState(true);
+                }
+            });
 
-        this.audio.addEventListener('loadedmetadata', () => {
-            if (this.durationElement) {
-                this.durationElement.textContent = this.formatTime(
-                    this.audio.duration
-                );
-            }
-        });
+            audio.addEventListener('pause', () => {
+                if (slot === this.activeSlot && !this.isTransitioning) {
+                    this.updatePlayingState(false);
+                }
+            });
 
-        this.audio.addEventListener('timeupdate', () => {
-            this.updateProgress();
-        });
+            audio.addEventListener('ended', () => {
+                if (slot !== this.activeSlot || this.isTransitioning) {
+                    return;
+                }
 
-        this.audio.addEventListener('canplay', () => {
-            const track = this.tracks[this.currentTrackIndex];
+                void this.next(true, false);
+            });
 
-            if (track && this.playerSubtitle) {
-                this.playerSubtitle.textContent = 'Hanna Music';
-            }
-        });
+            audio.addEventListener('loadedmetadata', () => {
+                if (slot !== this.activeSlot) {
+                    return;
+                }
 
-        this.audio.addEventListener('error', () => {
-            this.handleAudioError();
+                this.updateDuration();
+                this.updateMediaPositionState();
+            });
+
+            audio.addEventListener('timeupdate', () => {
+                if (slot !== this.activeSlot) {
+                    return;
+                }
+
+                this.updateProgress();
+                this.updateMediaPositionState();
+                this.maybeStartAutomaticCrossfade();
+            });
+
+            audio.addEventListener('error', () => {
+                if (slot === this.activeSlot) {
+                    this.handleAudioError(audio);
+                }
+            });
         });
 
         this.progressInput?.addEventListener('input', () => {
-            if (!Number.isFinite(this.audio.duration)) {
+            const audio = this.currentAudio();
+
+            if (!Number.isFinite(audio.duration)) {
                 return;
             }
 
             const ratio = Number(this.progressInput.value) / 1000;
-            this.audio.currentTime = ratio * this.audio.duration;
+            audio.currentTime = ratio * audio.duration;
+            this.autoTransitionTriggered = false;
         });
 
         this.volumeInput?.addEventListener('input', () => {
@@ -207,15 +236,19 @@ class HannaMusicPlayer {
             this.toggleMute();
         });
 
-        this.audio.addEventListener('volumechange', () => {
-            this.updateVolumeUi();
-        });
-
         this.bindMediaSession();
     }
 
+    currentAudio() {
+        return this.audios[this.activeSlot];
+    }
+
+    inactiveSlot() {
+        return this.activeSlot === 0 ? 1 : 0;
+    }
+
     setQueue(queue, currentTrackIndex) {
-        this.queue = Array.from(
+        this.orderedQueue = Array.from(
             new Set(
                 queue.filter(
                     (index) =>
@@ -226,6 +259,26 @@ class HannaMusicPlayer {
             )
         );
 
+        this.applyQueueMode(currentTrackIndex);
+    }
+
+    applyQueueMode(currentTrackIndex = this.currentTrackIndex) {
+        const hasCurrentTrack =
+            Number.isInteger(currentTrackIndex) &&
+            this.orderedQueue.includes(currentTrackIndex);
+
+        if (this.shuffleEnabled && this.orderedQueue.length > 1) {
+            const remaining = this.orderedQueue.filter(
+                (index) => index !== currentTrackIndex
+            );
+
+            this.queue = hasCurrentTrack
+                ? [currentTrackIndex, ...this.shuffle(remaining)]
+                : this.shuffle([...this.orderedQueue]);
+        } else {
+            this.queue = [...this.orderedQueue];
+        }
+
         this.queuePosition = this.queue.indexOf(currentTrackIndex);
 
         if (this.queuePosition === -1 && this.queue.length > 0) {
@@ -233,7 +286,23 @@ class HannaMusicPlayer {
         }
     }
 
-    async loadTrack(index, autoplay = true) {
+    toggleShuffle() {
+        this.shuffleEnabled = !this.shuffleEnabled;
+        this.applyQueueMode(this.currentTrackIndex);
+        this.persistPreference('hanna-player-shuffle', this.shuffleEnabled);
+        this.updateModeUi();
+    }
+
+    shuffle(items) {
+        for (let index = items.length - 1; index > 0; index -= 1) {
+            const randomIndex = Math.floor(Math.random() * (index + 1));
+            [items[index], items[randomIndex]] = [items[randomIndex], items[index]];
+        }
+
+        return items;
+    }
+
+    async loadTrack(index, autoplay = true, allowCrossfade = false) {
         const track = this.tracks[index];
 
         if (!track?.audioUrl) {
@@ -244,45 +313,192 @@ class HannaMusicPlayer {
             return;
         }
 
-        this.currentTrackIndex = index;
+        const currentAudio = this.currentAudio();
+        const canCrossfade =
+            allowCrossfade &&
+            this.currentTrackIndex >= 0 &&
+            !currentAudio.paused &&
+            this.crossfadeSeconds > 0;
 
-        const queuePosition = this.queue.indexOf(index);
-        if (queuePosition >= 0) {
-            this.queuePosition = queuePosition;
+        if (canCrossfade) {
+            await this.crossfadeTo(index);
+            return;
         }
 
-        this.audio.pause();
-        this.audio.src = track.audioUrl;
-        this.audio.preload = 'metadata';
-        this.audio.load();
+        await this.loadDirect(index, autoplay);
+    }
 
-        this.resetProgress();
-        this.updateTrackInformation(track);
-        this.updateActiveTrack();
-        this.updateMediaMetadata(track);
+    async loadDirect(index, autoplay = true) {
+        const track = this.tracks[index];
+        this.cancelTransition();
+
+        const activeAudio = this.currentAudio();
+        const inactiveAudio = this.audios[this.inactiveSlot()];
+
+        inactiveAudio.pause();
+        inactiveAudio.removeAttribute('src');
+        inactiveAudio.load();
+        this.setSlotLevel(this.inactiveSlot(), 0);
+
+        activeAudio.pause();
+        activeAudio.src = track.audioUrl;
+        activeAudio.preload = 'auto';
+        activeAudio.load();
+        this.setSlotLevel(this.activeSlot, 1);
+
+        this.commitTrack(index);
 
         if (autoplay) {
             await this.play();
         }
     }
 
-    async play() {
-        if (!this.audio || this.tracks.length === 0) {
+    async crossfadeTo(index) {
+        if (this.isTransitioning) {
             return;
         }
 
-        if (this.currentTrackIndex < 0 || !this.audio.getAttribute('src')) {
+        const track = this.tracks[index];
+        const outgoingSlot = this.activeSlot;
+        const incomingSlot = this.inactiveSlot();
+        const outgoingAudio = this.audios[outgoingSlot];
+        const incomingAudio = this.audios[incomingSlot];
+        const token = ++this.transitionToken;
+
+        this.isTransitioning = true;
+        this.autoTransitionTriggered = true;
+
+        try {
+            await this.ensureAudioEngine();
+
+            incomingAudio.pause();
+            incomingAudio.src = track.audioUrl;
+            incomingAudio.currentTime = 0;
+            incomingAudio.preload = 'auto';
+            incomingAudio.load();
+            this.setSlotLevel(incomingSlot, 0);
+
+            await incomingAudio.play();
+
+            if (token !== this.transitionToken) {
+                incomingAudio.pause();
+                return;
+            }
+
+            this.activeSlot = incomingSlot;
+            this.commitTrack(index);
+            this.updatePlayingState(true);
+
+            const duration = this.effectiveCrossfadeDuration(outgoingAudio);
+            const startedAt = performance.now();
+
+            await new Promise((resolve) => {
+                const frame = (timestamp) => {
+                    if (token !== this.transitionToken) {
+                        resolve();
+                        return;
+                    }
+
+                    const progress = Math.min(
+                        1,
+                        (timestamp - startedAt) / (duration * 1000)
+                    );
+                    const outgoingLevel = Math.cos(progress * Math.PI * 0.5);
+                    const incomingLevel = Math.sin(progress * Math.PI * 0.5);
+
+                    this.setSlotLevel(outgoingSlot, outgoingLevel);
+                    this.setSlotLevel(incomingSlot, incomingLevel);
+
+                    if (progress < 1) {
+                        requestAnimationFrame(frame);
+                    } else {
+                        resolve();
+                    }
+                };
+
+                requestAnimationFrame(frame);
+            });
+
+            if (token !== this.transitionToken) {
+                return;
+            }
+
+            outgoingAudio.pause();
+            outgoingAudio.removeAttribute('src');
+            outgoingAudio.load();
+            this.setSlotLevel(outgoingSlot, 0);
+            this.setSlotLevel(incomingSlot, 1);
+        } catch (error) {
+            console.error('Crossfade error:', error);
+
+            this.activeSlot = outgoingSlot;
+            incomingAudio.pause();
+            incomingAudio.removeAttribute('src');
+            incomingAudio.load();
+            this.setSlotLevel(incomingSlot, 0);
+            this.setSlotLevel(outgoingSlot, 1);
+
+            if (outgoingAudio.paused) {
+                await this.loadDirect(index, true);
+            }
+        } finally {
+            if (token === this.transitionToken) {
+                this.isTransitioning = false;
+            }
+        }
+    }
+
+    effectiveCrossfadeDuration(outgoingAudio) {
+        if (
+            !Number.isFinite(outgoingAudio.duration) ||
+            !Number.isFinite(outgoingAudio.currentTime)
+        ) {
+            return Math.max(0.2, this.crossfadeSeconds);
+        }
+
+        const remaining = Math.max(
+            0.2,
+            outgoingAudio.duration - outgoingAudio.currentTime
+        );
+
+        return Math.max(0.2, Math.min(this.crossfadeSeconds, remaining));
+    }
+
+    commitTrack(index) {
+        const track = this.tracks[index];
+        this.currentTrackIndex = index;
+        this.autoTransitionTriggered = false;
+
+        const queuePosition = this.queue.indexOf(index);
+        if (queuePosition >= 0) {
+            this.queuePosition = queuePosition;
+        }
+
+        this.resetProgress();
+        this.updateTrackInformation(track);
+        this.updateActiveTrack();
+        this.updateMediaMetadata(track);
+    }
+
+    async play() {
+        if (this.tracks.length === 0) {
+            return;
+        }
+
+        if (this.currentTrackIndex < 0 || !this.currentAudio().getAttribute('src')) {
             const firstTrack = this.queue[0] ?? this.allTracksQueue[0];
 
             if (!Number.isInteger(firstTrack)) {
                 return;
             }
 
-            await this.loadTrack(firstTrack, false);
+            await this.loadDirect(firstTrack, false);
         }
 
         try {
-            await this.audio.play();
+            await this.ensureAudioEngine();
+            await this.currentAudio().play();
+            this.updatePlayingState(true);
         } catch (error) {
             console.error('Audio play error:', error);
             this.updatePlayingState(false);
@@ -297,58 +513,116 @@ class HannaMusicPlayer {
     }
 
     pause() {
-        this.audio?.pause();
+        this.cancelTransition();
+        this.audios.forEach((audio, slot) => {
+            audio.pause();
+            this.setSlotLevel(slot, slot === this.activeSlot ? 1 : 0);
+        });
+        this.updatePlayingState(false);
     }
 
     async toggle() {
-        if (!this.audio || this.tracks.length === 0) {
+        if (this.tracks.length === 0) {
             return;
         }
 
-        if (this.currentTrackIndex < 0 || !this.audio.getAttribute('src')) {
+        if (this.currentTrackIndex < 0 || !this.currentAudio().getAttribute('src')) {
             const firstTrack = this.queue[0] ?? this.allTracksQueue[0];
 
             if (Number.isInteger(firstTrack)) {
-                await this.loadTrack(firstTrack, true);
+                await this.loadDirect(firstTrack, true);
             }
 
             return;
         }
 
-        if (this.audio.paused) {
+        if (this.currentAudio().paused) {
             await this.play();
         } else {
             this.pause();
         }
     }
 
-    async next() {
-        if (this.queue.length === 0) {
+    async next(automatic = false, allowCrossfade = true) {
+        if (this.queue.length === 0 || this.isTransitioning) {
             return;
         }
 
-        this.queuePosition =
-            (this.queuePosition + 1 + this.queue.length) %
-            this.queue.length;
+        const nextIndex = this.nextTrackIndex();
 
-        await this.loadTrack(this.queue[this.queuePosition], true);
+        if (!Number.isInteger(nextIndex)) {
+            return;
+        }
+
+        await this.loadTrack(
+            nextIndex,
+            true,
+            allowCrossfade && !this.currentAudio().paused
+        );
+
+        if (!automatic) {
+            this.autoTransitionTriggered = false;
+        }
+    }
+
+    nextTrackIndex() {
+        if (this.repeatOneEnabled && this.currentTrackIndex >= 0) {
+            return this.currentTrackIndex;
+        }
+
+        this.queuePosition =
+            (this.queuePosition + 1 + this.queue.length) % this.queue.length;
+
+        return this.queue[this.queuePosition];
     }
 
     async previous() {
-        if (this.queue.length === 0) {
+        if (this.queue.length === 0 || this.isTransitioning) {
             return;
         }
 
-        if (this.audio.currentTime > 3) {
-            this.audio.currentTime = 0;
+        const audio = this.currentAudio();
+
+        if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+            this.autoTransitionTriggered = false;
             return;
         }
 
         this.queuePosition =
-            (this.queuePosition - 1 + this.queue.length) %
-            this.queue.length;
+            (this.queuePosition - 1 + this.queue.length) % this.queue.length;
 
-        await this.loadTrack(this.queue[this.queuePosition], true);
+        await this.loadTrack(
+            this.queue[this.queuePosition],
+            true,
+            !audio.paused
+        );
+    }
+
+    maybeStartAutomaticCrossfade() {
+        const audio = this.currentAudio();
+
+        if (
+            this.autoTransitionTriggered ||
+            this.isTransitioning ||
+            audio.paused ||
+            this.queue.length === 0 ||
+            !Number.isFinite(audio.duration) ||
+            audio.duration <= 0
+        ) {
+            return;
+        }
+
+        const fadeWindow = Math.min(
+            this.crossfadeSeconds,
+            Math.max(0.5, audio.duration / 3)
+        );
+        const remaining = audio.duration - audio.currentTime;
+
+        if (this.crossfadeSeconds > 0 && remaining <= fadeWindow) {
+            this.autoTransitionTriggered = true;
+            void this.next(true, true);
+        }
     }
 
     updateTrackInformation(track) {
@@ -357,7 +631,7 @@ class HannaMusicPlayer {
         }
 
         if (this.playerSubtitle) {
-            this.playerSubtitle.textContent = 'Hanna Music';
+            this.playerSubtitle.textContent = this.currentContextName;
         }
 
         this.updateCover(track);
@@ -396,22 +670,32 @@ class HannaMusicPlayer {
         }
     }
 
+    updateDuration() {
+        if (this.durationElement) {
+            this.durationElement.textContent = this.formatTime(
+                this.currentAudio().duration
+            );
+        }
+    }
+
     updateProgress() {
+        const audio = this.currentAudio();
+
         if (this.currentTimeElement) {
             this.currentTimeElement.textContent = this.formatTime(
-                this.audio.currentTime
+                audio.currentTime
             );
         }
 
         if (
             !this.progressInput ||
-            !Number.isFinite(this.audio.duration) ||
-            this.audio.duration <= 0
+            !Number.isFinite(audio.duration) ||
+            audio.duration <= 0
         ) {
             return;
         }
 
-        const progress = this.audio.currentTime / this.audio.duration;
+        const progress = audio.currentTime / audio.duration;
         this.progressInput.value = String(Math.round(progress * 1000));
     }
 
@@ -429,11 +713,15 @@ class HannaMusicPlayer {
 
             if (icon) {
                 icon.textContent =
-                    index === this.currentTrackIndex && isPlaying
-                        ? '❚❚'
-                        : '▶';
+                    index === this.currentTrackIndex && isPlaying ? '❚❚' : '▶';
             }
         });
+
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = isPlaying
+                ? 'playing'
+                : 'paused';
+        }
     }
 
     updateActiveTrack() {
@@ -449,8 +737,42 @@ class HannaMusicPlayer {
         });
     }
 
-    handleAudioError() {
-        const code = this.audio?.error?.code;
+    updateModeUi() {
+        this.updateModeButton(
+            this.shuffleButton,
+            this.shuffleEnabled,
+            'پخش تصادفی فعال است',
+            'فعال‌کردن پخش تصادفی'
+        );
+        this.updateModeButton(
+            this.repeatOneButton,
+            this.repeatOneEnabled,
+            'فقط همین آهنگ تکرار می‌شود',
+            'تکرار فقط همین آهنگ'
+        );
+    }
+
+    updateModeButton(button, active, activeLabel, inactiveLabel) {
+        if (!button) {
+            return;
+        }
+
+        button.classList.toggle('player-mode-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        button.setAttribute('aria-label', active ? activeLabel : inactiveLabel);
+        button.title = active ? activeLabel : inactiveLabel;
+    }
+
+    updateCrossfadeLabel() {
+        if (this.crossfadeLabel) {
+            this.crossfadeLabel.textContent = this.crossfadeSeconds > 0
+                ? `فید ${this.crossfadeSeconds} ثانیه‌ای`
+                : 'فید خاموش';
+        }
+    }
+
+    handleAudioError(audio) {
+        const code = audio?.error?.code;
         const details = {
             1: 'بارگیری آهنگ لغو شد',
             2: 'دریافت فایل آهنگ با خطا روبه‌رو شد',
@@ -475,7 +797,7 @@ class HannaMusicPlayer {
         }
     }
 
-    restoreVolume() {
+    restorePreferences() {
         let volume = 0.8;
 
         try {
@@ -486,22 +808,24 @@ class HannaMusicPlayer {
             if (Number.isFinite(storedVolume)) {
                 volume = Math.min(1, Math.max(0, storedVolume));
             }
+
+            this.shuffleEnabled =
+                localStorage.getItem('hanna-player-shuffle') === 'true';
+            this.repeatOneEnabled =
+                localStorage.getItem('hanna-player-repeat-one') === 'true';
         } catch {
             // Local storage may be unavailable.
         }
+
+        this.masterVolume = volume;
+        this.muted = volume === 0;
 
         if (volume > 0) {
             this.lastNonZeroVolume = volume;
         }
 
-        try {
-            this.audio.muted = volume === 0;
-            this.audio.volume = volume;
-        } catch {
-            // Some mobile browsers keep output volume at system level.
-        }
-
-        this.updateVolumeUi(volume);
+        this.applyMasterVolume();
+        this.updateVolumeUi();
     }
 
     setVolume(volume, persist = false) {
@@ -510,73 +834,72 @@ class HannaMusicPlayer {
             Math.max(0, Number(volume) || 0)
         );
 
+        this.masterVolume = normalizedVolume;
+        this.muted = normalizedVolume === 0;
+
         if (normalizedVolume > 0) {
             this.lastNonZeroVolume = normalizedVolume;
         }
 
-        try {
-            this.audio.muted = normalizedVolume === 0;
-            this.audio.volume = normalizedVolume;
-        } catch {
-            // Some mobile browsers keep output volume at system level.
-        }
+        this.applyMasterVolume();
 
         if (persist) {
-            try {
-                localStorage.setItem(
-                    'hanna-player-volume',
-                    String(normalizedVolume)
-                );
-            } catch {
-                // Local storage may be unavailable.
-            }
+            this.persistPreference('hanna-player-volume', normalizedVolume);
         }
 
-        this.updateVolumeUi(normalizedVolume);
+        this.updateVolumeUi();
     }
 
     toggleMute() {
-        if (!this.audio) {
-            return;
+        if (this.muted || this.masterVolume === 0) {
+            this.masterVolume = this.lastNonZeroVolume > 0
+                ? this.lastNonZeroVolume
+                : 0.8;
+            this.muted = false;
+        } else {
+            this.lastNonZeroVolume = this.masterVolume;
+            this.muted = true;
         }
 
-        if (this.audio.muted || this.audio.volume === 0) {
-            const restoredVolume =
-                this.lastNonZeroVolume > 0
-                    ? this.lastNonZeroVolume
-                    : 0.8;
-
-            this.audio.muted = false;
-            this.setVolume(restoredVolume, true);
-            return;
-        }
-
-        if (this.audio.volume > 0) {
-            this.lastNonZeroVolume = this.audio.volume;
-        }
-
-        this.audio.muted = true;
-        this.updateVolumeUi(0);
+        this.applyMasterVolume();
+        this.persistPreference(
+            'hanna-player-volume',
+            this.muted ? 0 : this.masterVolume
+        );
+        this.updateVolumeUi();
     }
 
-    updateVolumeUi(preferredVolume = null) {
-        const rawVolume = Number.isFinite(preferredVolume)
-            ? preferredVolume
-            : this.audio?.volume ?? 0.8;
+    applyMasterVolume() {
+        this.audios.forEach((audio, slot) => {
+            const isActive = slot === this.activeSlot;
+            this.setSlotLevel(slot, isActive ? 1 : 0);
+            audio.muted = false;
+        });
+    }
 
-        const effectiveVolume =
-            this.audio?.muted
-                ? 0
-                : Math.min(1, Math.max(0, rawVolume));
+    setSlotLevel(slot, level) {
+        const normalizedLevel = Math.min(1, Math.max(0, level));
+        const volume = this.muted ? 0 : this.masterVolume * normalizedLevel;
 
+        if (this.gainNodes[slot]) {
+            this.gainNodes[slot].gain.value = volume;
+            return;
+        }
+
+        try {
+            this.audios[slot].volume = volume;
+        } catch {
+            // Some mobile browsers keep output volume at system level.
+        }
+    }
+
+    updateVolumeUi() {
+        const effectiveVolume = this.muted ? 0 : this.masterVolume;
         const percentage = Math.round(effectiveVolume * 100);
 
         if (this.volumeInput) {
             this.volumeInput.value = String(percentage);
-            this.volumeInput.setAttribute(
-                'aria-valuetext',
-                `${percentage} درصد`
-            );
+            this.volumeInput.setAttribute('aria-valuetext', `${percentage} درصد`);
         }
 
         if (this.volumeValue) {
@@ -585,19 +908,69 @@ class HannaMusicPlayer {
 
         if (this.volumeIcon) {
             this.volumeIcon.textContent =
-                percentage === 0
-                    ? '🔇'
-                    : percentage < 50
-                        ? '🔉'
-                        : '🔊';
+                percentage === 0 ? '🔇' : percentage < 50 ? '🔉' : '🔊';
         }
 
         this.muteButton?.setAttribute(
             'aria-label',
-            percentage === 0
-                ? 'وصل‌کردن صدا'
-                : 'قطع صدا'
+            percentage === 0 ? 'وصل‌کردن صدا' : 'قطع صدا'
         );
+    }
+
+    async ensureAudioEngine() {
+        if (this.audioContext) {
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+
+            return;
+        }
+
+        const AudioContextClass =
+            window.AudioContext || window.webkitAudioContext;
+
+        if (!AudioContextClass) {
+            this.applyMasterVolume();
+            return;
+        }
+
+        try {
+            this.audioContext = new AudioContextClass();
+            this.gainNodes = this.audios.map((audio, slot) => {
+                const source = this.audioContext.createMediaElementSource(audio);
+                const gain = this.audioContext.createGain();
+                source.connect(gain).connect(this.audioContext.destination);
+                gain.gain.value = slot === this.activeSlot
+                    ? this.masterVolume
+                    : 0;
+                audio.volume = 1;
+                return gain;
+            });
+
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+
+            this.applyMasterVolume();
+        } catch (error) {
+            console.warn('Web Audio is unavailable; using volume fallback.', error);
+            this.audioContext = null;
+            this.gainNodes = [];
+            this.applyMasterVolume();
+        }
+    }
+
+    cancelTransition() {
+        this.transitionToken += 1;
+        this.isTransitioning = false;
+    }
+
+    persistPreference(key, value) {
+        try {
+            localStorage.setItem(key, String(value));
+        } catch {
+            // Local storage may be unavailable.
+        }
     }
 
     updateDisabledState() {
@@ -608,6 +981,8 @@ class HannaMusicPlayer {
             this.toggleButton,
             this.previousButton,
             this.nextButton,
+            this.shuffleButton,
+            this.repeatOneButton,
             this.progressInput,
             this.volumeInput,
             this.muteButton,
@@ -654,7 +1029,7 @@ class HannaMusicPlayer {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: track.title,
             artist: 'Hanna Music',
-            album: 'برای حنا',
+            album: this.currentContextName,
             artwork: track.coverUrl
                 ? [
                     {
@@ -664,6 +1039,35 @@ class HannaMusicPlayer {
                 ]
                 : [],
         });
+    }
+
+    updateMediaPositionState() {
+        if (
+            !('mediaSession' in navigator) ||
+            typeof navigator.mediaSession.setPositionState !== 'function'
+        ) {
+            return;
+        }
+
+        const audio = this.currentAudio();
+
+        if (
+            !Number.isFinite(audio.duration) ||
+            audio.duration <= 0 ||
+            !Number.isFinite(audio.currentTime)
+        ) {
+            return;
+        }
+
+        try {
+            navigator.mediaSession.setPositionState({
+                duration: audio.duration,
+                playbackRate: audio.playbackRate,
+                position: Math.min(audio.currentTime, audio.duration),
+            });
+        } catch {
+            // Invalid or unsupported position state.
+        }
     }
 
     bindMediaSession() {
@@ -684,10 +1088,18 @@ class HannaMusicPlayer {
         });
         register('pause', () => this.pause());
         register('nexttrack', () => {
-            void this.next();
+            void this.next(false);
         });
         register('previoustrack', () => {
             void this.previous();
+        });
+        register('seekto', (details) => {
+            const audio = this.currentAudio();
+
+            if (Number.isFinite(details.seekTime)) {
+                audio.currentTime = details.seekTime;
+                this.autoTransitionTriggered = false;
+            }
         });
     }
 }

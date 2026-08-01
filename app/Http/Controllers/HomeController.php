@@ -5,199 +5,263 @@ namespace App\Http\Controllers;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\View\View;
+use JsonException;
 
 class HomeController extends Controller
 {
     public function index(): View
     {
-        $tracks = $this->discoverTracks();
+        [$tracks, $folderPlaylists] = $this->discoverLibrary();
 
-        $playlists = $this->preparePlaylists($tracks);
+        $configuredPlaylists = $this->prepareConfiguredPlaylists($tracks);
+
+        $playlists = $folderPlaylists
+            ->concat($configuredPlaylists)
+            ->unique('id')
+            ->values();
 
         return view('home', [
-            'pageTitle' => config(
-                'music.title',
-                'Hanna Music'
-            ),
-
+            'pageTitle' => config('music.title', 'Hanna Music'),
             'pageDescription' => config(
                 'music.description',
                 'موسیقی‌های حنا'
             ),
-
             'tracks' => $tracks,
-
             'playlists' => $playlists,
         ]);
     }
 
     /**
-     * تمام فایل‌های صوتی موجود در public/music/audio را پیدا می‌کند.
+     * @return array{0: Collection<int, array<string, mixed>>, 1: Collection<int, array<string, mixed>>}
      */
-    private function discoverTracks(): Collection
+    private function discoverLibrary(): array
     {
-        $audioDirectory = trim(
-            config(
-                'music.audio_directory',
-                'music/audio'
-            ),
+        $trackMap = collect();
+        $folderPlaylists = collect();
+
+        $legacyDirectory = trim(
+            config('music.audio_directory', 'music/audio'),
             '/\\'
         );
 
-        $absoluteDirectory = public_path(
-            $audioDirectory
-        );
+        $legacyAbsolutePath = public_path($legacyDirectory);
 
-        if (! File::isDirectory($absoluteDirectory)) {
-            return collect();
+        if (File::isDirectory($legacyAbsolutePath)) {
+            $this->audioFiles($legacyAbsolutePath)->each(function ($file) use (
+                $trackMap
+            ): void {
+                $track = $this->makeTrack($file->getPathname());
+                $trackMap->put($track['relative_path'], $track);
+            });
         }
 
-        $allowedExtensions = collect(
-            config(
-                'music.allowed_extensions',
-                ['mp3', 'm4a', 'aac', 'ogg', 'wav', 'flac']
-            )
-        )
-            ->map(
-                fn (string $extension): string =>
-                    mb_strtolower($extension)
-            )
-            ->all();
+        $playlistsDirectory = trim(
+            config('music.playlists_directory', 'music/playlists'),
+            '/\\'
+        );
 
-        return collect(File::files($absoluteDirectory))
-            ->filter(function ($file) use (
-                $allowedExtensions
-            ): bool {
-                return in_array(
-                    mb_strtolower(
-                        $file->getExtension()
-                    ),
-                    $allowedExtensions,
-                    true
-                );
-            })
-            ->sort(function ($firstFile, $secondFile): int {
-                return strnatcasecmp(
-                    $firstFile->getFilename(),
-                    $secondFile->getFilename()
-                );
-            })
-            ->values()
-            ->map(function ($file) use (
-                $audioDirectory
-            ): array {
-                $filename = $file->getFilename();
+        $playlistsAbsolutePath = public_path($playlistsDirectory);
 
-                $extension = $file->getExtension();
+        if (File::isDirectory($playlistsAbsolutePath)) {
+            collect(File::directories($playlistsAbsolutePath))
+                ->sort(fn (string $first, string $second): int =>
+                    strnatcasecmp(basename($first), basename($second))
+                )
+                ->values()
+                ->each(function (string $directory) use (
+                    $trackMap,
+                    $folderPlaylists,
+                    $playlistsDirectory
+                ): void {
+                    $metadata = $this->readPlaylistMetadata($directory);
+                    $playlistCover = $this->findPlaylistCover(
+                        $directory,
+                        $metadata['cover'] ?? null
+                    );
 
-                $basename = $file->getBasename(
-                    '.'.$extension
-                );
+                    $trackIds = $this->audioFiles($directory)
+                        ->map(function ($file) use (
+                            $trackMap,
+                            $playlistCover
+                        ): string {
+                            $track = $this->makeTrack(
+                                $file->getPathname(),
+                                $playlistCover
+                            );
 
-                $title = $this->makeTitleFromFilename(
-                    $basename
-                );
+                            $trackMap->put($track['relative_path'], $track);
 
-                $relativeAudioPath =
-                    $audioDirectory.'/'.$filename;
+                            return $track['id'];
+                        })
+                        ->unique()
+                        ->values();
 
-                return [
-                    'id' => 'track-'.substr(
-                        sha1($filename),
-                        0,
-                        16
-                    ),
+                    if ($trackIds->isEmpty()) {
+                        return;
+                    }
 
-                    'title' => $title,
+                    $folderName = basename($directory);
+                    $relativeFolder = $playlistsDirectory.'/'.$folderName;
 
-                    'filename' => $filename,
+                    $folderPlaylists->push([
+                        'id' => 'folder-'.substr(sha1($relativeFolder), 0, 16),
+                        'name' => (string) (
+                            $metadata['name']
+                            ?? $this->makeDisplayName($folderName)
+                        ),
+                        'description' => $metadata['description'] ?? null,
+                        'cover_url' => $playlistCover,
+                        'track_ids' => $trackIds->all(),
+                        'track_count' => $trackIds->count(),
+                        'source' => 'folder',
+                    ]);
+                });
+        }
 
-                    'audio_url' => asset(
-                        $this->encodeAssetPath(
-                            $relativeAudioPath
-                        )
-                    ),
-
-                    'cover_url' => $this->findCover(
-                        $basename
-                    ),
-
-                    'extension' => mb_strtolower(
-                        $extension
-                    ),
-
-                    'size' => $file->getSize(),
-                ];
-            });
+        return [
+            $trackMap->values(),
+            $folderPlaylists,
+        ];
     }
 
     /**
-     * عنوان قابل‌نمایش را از نام فایل استخراج می‌کند.
-     *
-     * مثال:
-     * 03 Blinding Lights.flac
-     * تبدیل می‌شود به:
-     * Blinding Lights
+     * @return Collection<int, \Symfony\Component\Finder\SplFileInfo>
      */
-    private function makeTitleFromFilename(
-        string $basename
-    ): string {
-        $title = preg_replace(
-            '/^\s*\d+\s*[-._]?\s*/u',
-            '',
-            $basename
-        );
+    private function audioFiles(string $directory): Collection
+    {
+        $allowedExtensions = collect(
+            config('music.allowed_extensions', [
+                'mp3',
+                'm4a',
+                'aac',
+                'ogg',
+                'wav',
+                'flac',
+                'opus',
+            ])
+        )
+            ->map(fn (string $extension): string => mb_strtolower($extension))
+            ->all();
 
-        $title = str_replace(
-            '_',
-            ' ',
-            $title ?? $basename
-        );
+        return collect(File::allFiles($directory))
+            ->filter(fn ($file): bool => in_array(
+                mb_strtolower($file->getExtension()),
+                $allowedExtensions,
+                true
+            ))
+            ->sort(fn ($first, $second): int => strnatcasecmp(
+                $first->getRelativePathname(),
+                $second->getRelativePathname()
+            ))
+            ->values();
+    }
 
-        $title = preg_replace(
-            '/\s+/u',
-            ' ',
-            $title
-        );
+    /**
+     * @return array<string, mixed>
+     */
+    private function makeTrack(
+        string $absolutePath,
+        ?string $fallbackCover = null
+    ): array {
+        $relativePath = $this->relativePublicPath($absolutePath);
+        $filename = basename($absolutePath);
+        $extension = pathinfo($filename, PATHINFO_EXTENSION);
+        $basename = pathinfo($filename, PATHINFO_FILENAME);
+
+        return [
+            'id' => 'track-'.substr(sha1($relativePath), 0, 16),
+            'title' => $this->makeTitleFromFilename($basename),
+            'filename' => $filename,
+            'relative_path' => $relativePath,
+            'audio_url' => asset($this->encodeAssetPath($relativePath)),
+            'cover_url' => $this->findTrackCover($absolutePath)
+                ?? $fallbackCover,
+            'extension' => mb_strtolower($extension),
+            'size' => File::size($absolutePath),
+        ];
+    }
+
+    private function makeTitleFromFilename(string $basename): string
+    {
+        $title = preg_replace('/^\s*\d+\s*[-._]?\s*/u', '', $basename);
+        $title = str_replace(['_', '-'], ' ', $title ?? $basename);
+        $title = preg_replace('/\s+/u', ' ', $title);
 
         return trim($title ?: $basename);
     }
 
-    /**
-     * اگر کاوری هم‌نام آهنگ وجود داشته باشد، آن را پیدا می‌کند.
-     *
-     * مثال:
-     * audio/03 Blinding Lights.flac
-     * covers/03 Blinding Lights.webp
-     */
-    private function findCover(
-        string $audioBasename
-    ): ?string {
-        $coverDirectory = trim(
-            config(
-                'music.cover_directory',
-                'music/covers'
-            ),
-            '/\\'
-        );
+    private function makeDisplayName(string $name): string
+    {
+        $name = str_replace(['_', '-'], ' ', $name);
+        $name = preg_replace('/\s+/u', ' ', $name);
 
-        foreach (
-            ['webp', 'jpg', 'jpeg', 'png']
-            as $extension
-        ) {
-            $relativePath =
-                $coverDirectory
-                .'/'
-                .$audioBasename
+        return trim($name ?: 'پلی‌لیست');
+    }
+
+    private function findTrackCover(string $audioAbsolutePath): ?string
+    {
+        $directory = dirname($audioAbsolutePath);
+        $basename = pathinfo($audioAbsolutePath, PATHINFO_FILENAME);
+
+        foreach (['webp', 'jpg', 'jpeg', 'png'] as $extension) {
+            $candidate = $directory.DIRECTORY_SEPARATOR.$basename.'.'.$extension;
+
+            if (File::exists($candidate)) {
+                return asset($this->encodeAssetPath(
+                    $this->relativePublicPath($candidate)
+                ));
+            }
+        }
+
+        $legacyCoverDirectory = public_path(trim(
+            config('music.cover_directory', 'music/covers'),
+            '/\\'
+        ));
+
+        foreach (['webp', 'jpg', 'jpeg', 'png'] as $extension) {
+            $candidate = $legacyCoverDirectory
+                .DIRECTORY_SEPARATOR
+                .$basename
                 .'.'
                 .$extension;
 
-            if (File::exists(public_path($relativePath))) {
-                return asset(
-                    $this->encodeAssetPath(
-                        $relativePath
-                    )
-                );
+            if (File::exists($candidate)) {
+                return asset($this->encodeAssetPath(
+                    $this->relativePublicPath($candidate)
+                ));
+            }
+        }
+
+        return null;
+    }
+
+    private function findPlaylistCover(
+        string $directory,
+        ?string $configuredCover = null
+    ): ?string {
+        $candidates = [];
+
+        if (is_string($configuredCover) && trim($configuredCover) !== '') {
+            $candidates[] = $directory
+                .DIRECTORY_SEPARATOR
+                .ltrim(str_replace('/', DIRECTORY_SEPARATOR, $configuredCover), '/\\');
+        }
+
+        foreach (['cover', 'folder', 'playlist'] as $name) {
+            foreach (['webp', 'jpg', 'jpeg', 'png'] as $extension) {
+                $candidates[] = $directory
+                    .DIRECTORY_SEPARATOR
+                    .$name
+                    .'.'
+                    .$extension;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            if (File::isFile($candidate)) {
+                return asset($this->encodeAssetPath(
+                    $this->relativePublicPath($candidate)
+                ));
             }
         }
 
@@ -205,49 +269,79 @@ class HomeController extends Controller
     }
 
     /**
-     * پلی‌لیست‌های تعریف‌شده در config/music.php را آماده می‌کند.
+     * @return array{name?: string, description?: string, cover?: string}
      */
-    private function preparePlaylists(
-        Collection $tracks
-    ): Collection {
-        $tracksByFilename = $tracks->keyBy(
-            'filename'
+    private function readPlaylistMetadata(string $directory): array
+    {
+        $metadataPath = $directory.DIRECTORY_SEPARATOR.'playlist.json';
+
+        if (! File::isFile($metadataPath)) {
+            return [];
+        }
+
+        try {
+            $metadata = json_decode(
+                File::get($metadataPath),
+                true,
+                512,
+                JSON_THROW_ON_ERROR
+            );
+        } catch (JsonException) {
+            return [];
+        }
+
+        return is_array($metadata) ? $metadata : [];
+    }
+
+    private function prepareConfiguredPlaylists(Collection $tracks): Collection
+    {
+        $tracksByRelativePath = $tracks->keyBy(
+            fn (array $track): string => mb_strtolower($track['relative_path'])
         );
 
-        return collect(
-            config('music.playlists', [])
-        )
-            ->filter(function (array $playlist): bool {
-                return isset(
-                    $playlist['id'],
-                    $playlist['name']
-                );
-            })
-            ->map(function (
-                array $playlist
-            ) use (
+        $tracksByFilename = $tracks->groupBy(
+            fn (array $track): string => mb_strtolower($track['filename'])
+        );
+
+        return collect(config('music.playlists', []))
+            ->filter(fn ($playlist): bool => is_array($playlist)
+                && isset($playlist['id'], $playlist['name'])
+            )
+            ->map(function (array $playlist) use (
                 $tracks,
+                $tracksByRelativePath,
                 $tracksByFilename
             ): array {
-                $configuredFiles =
-                    $playlist['files'] ?? [];
+                $configuredFiles = $playlist['files'] ?? [];
 
                 if ($configuredFiles === '*') {
-                    $trackIds = $tracks
-                        ->pluck('id')
-                        ->values();
+                    $trackIds = $tracks->pluck('id')->values();
                 } else {
-                    $trackIds = collect(
-                        $configuredFiles
-                    )
-                        ->map(function (
-                            string $filename
-                        ) use (
+                    $trackIds = collect($configuredFiles)
+                        ->map(function (string $configuredFile) use (
+                            $tracksByRelativePath,
                             $tracksByFilename
                         ): ?string {
-                            return $tracksByFilename
-                                ->get($filename)['id']
-                                ?? null;
+                            $normalized = mb_strtolower(ltrim(
+                                str_replace('\\', '/', $configuredFile),
+                                '/'
+                            ));
+
+                            $byPath = $tracksByRelativePath->get($normalized);
+
+                            if (is_array($byPath)) {
+                                return $byPath['id'];
+                            }
+
+                            $byFilename = $tracksByFilename->get(
+                                mb_strtolower(basename($configuredFile))
+                            );
+
+                            $firstMatch = $byFilename?->first();
+
+                            return is_array($firstMatch)
+                                ? $firstMatch['id']
+                                : null;
                         })
                         ->filter()
                         ->unique()
@@ -258,49 +352,32 @@ class HomeController extends Controller
 
                 return [
                     'id' => (string) $playlist['id'],
-
                     'name' => (string) $playlist['name'],
-
-                    'description' =>
-                        $playlist['description']
-                        ?? null,
-
-                    'cover_url' => $cover
-                        ? asset(
-                            $this->encodeAssetPath(
-                                ltrim($cover, '/\\')
-                            )
-                        )
+                    'description' => $playlist['description'] ?? null,
+                    'cover_url' => is_string($cover) && $cover !== ''
+                        ? asset($this->encodeAssetPath(ltrim($cover, '/\\')))
                         : null,
-
                     'track_ids' => $trackIds->all(),
-
                     'track_count' => $trackIds->count(),
+                    'source' => 'config',
                 ];
             })
-            ->filter(
-                fn (array $playlist): bool =>
-                    $playlist['track_count'] > 0
-            )
+            ->filter(fn (array $playlist): bool => $playlist['track_count'] > 0)
             ->values();
     }
 
-    /**
-     * فاصله‌ها و حروف خاص نام فایل را برای URL رمزگذاری می‌کند.
-     */
-    private function encodeAssetPath(
-        string $path
-    ): string {
-        return collect(
-            explode(
-                '/',
-                str_replace('\\', '/', $path)
-            )
-        )
-            ->map(
-                fn (string $segment): string =>
-                    rawurlencode($segment)
-            )
+    private function relativePublicPath(string $absolutePath): string
+    {
+        $publicPath = rtrim(str_replace('\\', '/', public_path()), '/');
+        $normalized = str_replace('\\', '/', $absolutePath);
+
+        return ltrim(substr($normalized, strlen($publicPath)), '/');
+    }
+
+    private function encodeAssetPath(string $path): string
+    {
+        return collect(explode('/', str_replace('\\', '/', $path)))
+            ->map(fn (string $segment): string => rawurlencode($segment))
             ->implode('/');
     }
 }

@@ -178,6 +178,7 @@
                                 type="button"
                                 data-playlist-start
                                 data-playlist-track-ids='@json($playlist["track_ids"])'
+                                data-playlist-name="{{ $playlist['name'] }}"
                                 class="mt-4 flex w-full touch-manipulation select-none
                                        items-center justify-center gap-2 rounded-full
                                        bg-zinc-950 px-4 py-3 text-sm font-bold text-white
@@ -289,8 +290,8 @@
                     </div>
                     <p class="mt-4 text-sm leading-6 text-zinc-500">
                         هنوز آهنگی داخل پوشه
-                        <code class="rounded-md bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-white/10">public/music/audio</code>
-                        قرار نگرفته است.
+                        <code class="rounded-md bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-white/10">public/music/playlists</code>
+                        قرار نگرفته است. هر پوشه داخل این مسیر، یک پلی‌لیست خواهد بود.
                     </p>
                 </div>
             @endforelse
